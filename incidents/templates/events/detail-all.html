@@ -3,11 +3,14 @@
 {% load fir_artifacts %}
 {% load i18n %}
 {% load staticfiles %}
+{% load authorization %}
+{% load markdown %}
 
 {% block custom_css %}
 {% endblock %}
 
 {% block custom_js %}
+{% rich_edit_static %}
 <script type="text/javascript" src="{% static "custom_js/hotkeys.js" %}"></script>
 {% plugin_point 'details_static' %}
 
@@ -15,6 +18,8 @@
 {% endblock %}
 
 {% block content %}
+    {%  has_perm 'incidents.handle_incidents' obj=event as can_handle_incident %}
+    {% can_comment event as can_comment_incident %}
 	<div id='details-actions-all'>
 	<div class="details-actions-supmenu" id="details-actions-add">
 		<ul class="list-unstyled">
@@ -30,10 +35,15 @@
 
 	<div id="details-actions">
 		<ul class="list-unstyled">
+            {% if can_handle_incident %}
 			<li><a href="#" id="details-actions-add-link"><i class="glyphicon glyphicon-plus"></i>{%  trans "Add" %}</a></li>
-			<li><a href="#" id='details-actions-comment' data-toggle='modal' data-target='#addComment'>
+            {% endif %}
+            {% if can_comment_incident %}
+			<li><a href="#" id='details-actions-comment' data-target='#addComment'>
 				<i class="glyphicon glyphicon-comment"></i>{%  trans "Comment" context "verb" %}
 			</a></li>
+            {% endif %}
+            {% if can_handle_incident %}
 			<li><a href="{% url 'incidents:edit' event.id %}"><i class="glyphicon glyphicon-pencil"></i>{%  trans "Edit" %}</a></li>
 			{% if event.status != 'O' %}
 				<li>
@@ -59,6 +69,7 @@
 					</form>
 				</li>
 			{% endif %}
+            {% endif %}
 			<li><a href="{% url 'incidents:followup' event.id %}"><i class="glyphicon glyphicon-retweet"></i>{%  trans "Incident followup" %}</a></li>
 			{% plugin_point 'details_actions' %}
 		</ul>
@@ -90,7 +101,7 @@
 			</table>
 		</div>
 
-		<h1>{% if event.is_incident %}{%  trans "Incident" %}{% else %}{%  trans "Event" %}{% endif %}{% if incident_show_id %} #{{ event.id }}{% endif %} / {{event.category}} / {{event.subject}}</h1>
+		<h1>{% if event.is_incident %}{%  trans "Incident" %}{% else %}{%  trans "Event" %}{% endif %}{% if incident_show_id %} {{ event|object_id }}{% endif %} / {{event.category}} / {{event.subject}}</h1>
 		<div class="row">
 			<div class="col-sm-7 col-xs-12">
                 {% trans "someone" as someone %}
@@ -98,7 +109,7 @@
 
 				<div class='widget' id='description'>
 					<h4 class='widget'>{%  trans "Description" %}</h4>
-					<p>{{ event.description|safe }}</p>
+					<p>{{ event.description|markdown }}</p>
 				</div>
 
 				{% plugin_point 'details_main' %}
@@ -121,7 +132,7 @@
 							<tbody id='attribute_list'>
 								{% include 'events/_attributes.html' %}
 							</tbody>
-
+                            {% if can_handle_incident %}
 							<form id="add-attribute-form" action="{% url 'incidents:add_attribute' event.id %}" method="post" data-ajaxform data-action='html' data-target='#attribute_list' data-hide='#attribute_form' data-show='#show_attribute_form'>
 							<tr id="show_attribute_form">
 								<td colspan='3'><a href='#'>+ {%  trans "Add attribute" %}</a></td>
@@ -138,6 +149,7 @@
 							<td><button type="submit" class="btn btn-xs btn-link">{%  trans "Add" %}</button></td>
 							</tr>
 							</form>
+                            {% endif %}
 						</table>
 					</div>
 				{% endif %}
@@ -170,15 +182,14 @@
 						</tr>
 					</thead>
 					{% for comment in comments.all reversed %}
-						{% include 'events/_comment.html' %}
+						{% include 'events/_comment.html' with can_handle_incident=can_handle_incident %}
 					{% endfor %}
 				</table>
 			</div>
 			{% plugin_point 'details_tab_content' %}
 		</div>
-
 		<!-- Modal for comments -->
-		<div id="addComment" class="modal fade" tabindex="-1" role="dialog" aria-labelledby="addCommentLabel" aria-hidden="true">
+		<div id="addComment" class="modal" tabindex="-1" role="dialog" aria-labelledby="addCommentLabel" aria-hidden="true">
 			<div class="modal-dialog">
 				<div class="modal-content">
 					<form id="comment_form" method="POST" data-ajaxform data-target='#tab_comments tbody' data-action='prepend' data-new-comment-url="{% url 'incidents:comment' event.id %}">
@@ -215,7 +226,7 @@
 								</div>
 
 								<div class="form-group" id="add-comment-area">
-									{{ comment_form.comment }}
+									{% rich_edit comment_form.comment %}
 									<span class='help-block'>
 										{% for error in comment_form.comment.errors %}
 											{{error}}
@@ -233,5 +244,7 @@
 				</div>
 			</div>
 		</div>
+    <div id='comment_edit_modals'>
+    </div>
 	</div>
 {% endblock %}

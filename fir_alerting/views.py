@@ -4,17 +4,26 @@ from django.db.models import Q
 from django.template import Context
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.template import Template
-from django.conf import settings
 from json import dumps
 
+from incidents.authorization.decorator import authorization_required
 from incidents.views import is_incident_handler
 from incidents.models import Incident, BusinessLine
 
 from fir_alerting.models import RecipientTemplate, CategoryTemplate, EmailForm
+from fir_email.helpers import send
+
+
+def get_rec_template(query):
+    template = list(RecipientTemplate.objects.filter(query))
+
+    if len(template) > 0:
+        return template[0]
+    else:
+        return None
 
 
 @login_required
-@user_passes_test(is_incident_handler)
 def emailform(request):
     email_form = EmailForm()
 
@@ -22,9 +31,13 @@ def emailform(request):
 
 
 @login_required
-@user_passes_test(is_incident_handler)
-def get_template(request, incident_id, template_type, bl=None):
-    i = get_object_or_404(Incident, pk=incident_id)
+@authorization_required('incidents.handle_incidents', Incident, view_arg='incident_id')
+def get_template(request, incident_id, template_type, bl=None, authorization_target=None):
+    if authorization_target is None:
+        i = get_object_or_404(Incident.authorization.for_user(request.user, 'incidents.handle_incidents'),
+                              pk=incident_id)
+    else:
+        i = authorization_target
 
     try:
         cat_template = CategoryTemplate.objects.get(incident_category=i.category, type=template_type)
@@ -32,35 +45,27 @@ def get_template(request, incident_id, template_type, bl=None):
         cat_template = None
 
     rec_template = None
+
     if not bl:
-        q_bl = Q()
-        bls = i.concerned_business_lines.all()
-        for b in bls:
-            q_bl |= Q(business_line=b)
+        q_bl = Q(business_line__in=i.concerned_business_lines.all())
         bl_name = i.get_business_lines_names()
     else:
         bl = get_object_or_404(BusinessLine, pk=bl)
         q_bl = Q(business_line=bl)
         bl_name = bl.name
 
-    try:
-        rec_template = RecipientTemplate.objects.get((q_bl | Q(business_line=None)) & Q(type=template_type))
-    except Exception, e:
-        print "Email template ERROR: ", e
-        parents = list(set(i.concerned_business_lines.all()))
+    rec_template = get_rec_template(q_bl & Q(type=template_type))
 
-        while not rec_template and parents != [None]:
-            try:
-                parents = list(set([b.parent for b in parents]))
-                q_parent = Q()
-                for p in parents:
-                    q_parent |= Q(business_line=p)
-                template = list(RecipientTemplate.objects.filter((q_parent | Q(business_line=None)) & Q(type=template_type)))
-                if len(template) > 0:
-                    rec_template = template[0]
-            except Exception as e:
-                print "Email template ERROR 2: ", e
-                break
+    parents = list(set(i.concerned_business_lines.all()))
+
+    while not rec_template and len(parents):
+        parents = list(set([b.get_parent() for b in parents if not b.is_root()]))
+        q_parents = Q(business_line__in=parents)
+
+        rec_template = get_rec_template(q_parents & Q(type=template_type))
+
+    if rec_template is None:
+        rec_template = get_rec_template(Q(business_line=None) & Q(type=template_type))
 
     artifacts = {}
     for a in i.artifacts.all():
@@ -73,6 +78,7 @@ def get_template(request, incident_id, template_type, bl=None):
         'bl': bl_name,
         'phishing_url': i.subject.replace('http://', "hxxp://").replace('https://', 'hxxps://'),
         'artifacts': artifacts,
+        'incident_id': i.id
     })
 
     response = {
@@ -93,31 +99,15 @@ def get_template(request, incident_id, template_type, bl=None):
 def send_email(request):
     if request.method == 'POST':
         try:
-            from django.core.mail import EmailMultiAlternatives
-            behalf = request.POST['behalf']
-            to = request.POST['to']
-            cc = request.POST['cc']
-            bcc = request.POST['bcc']
-
-            subject = request.POST['subject']
-            body = request.POST['body']
-
-            if hasattr(settings, 'REPLY_TO'):
-                reply_to = {'Reply-To': settings.REPLY_TO, 'Return-Path': settings.REPLY_TO}
-            else:
-                reply_to = {}
-
-            e = EmailMultiAlternatives(
-                subject=subject,
-                from_email=behalf,
-                to=to.split(';'),
-                cc=cc.split(';'),
-                bcc=bcc.split(';'),
-                headers=reply_to
+            send(
+                request,
+                to=request.POST['to'],
+                subject=request.POST['subject'],
+                body=request.POST['body'],
+                cc=request.POST['cc'],
+                bcc=request.POST['bcc'],
+                behalf=request.POST['behalf']
             )
-            e.attach_alternative(body, 'text/html')
-            e.content_subtype = 'html'
-            e.send()
 
             return HttpResponse(dumps({'status': 'ok'}), content_type="application/json")
 

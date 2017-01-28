@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django import forms
 
@@ -18,6 +19,13 @@ class TodoItem(models.Model):
 
 
 class TodoItemForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop('for_user', None)
+        super(TodoItemForm, self).__init__(*args, **kwargs)
+        if self.user is not None:
+            self.fields['business_line'].queryset = BusinessLine.authorization.for_user(self.user,
+                                                                                        'incidents.handle_incidents')
+
     class Meta:
         model = TodoItem
         exclude = ('incident', 'category', 'done_time')
@@ -33,7 +41,7 @@ class TodoListTemplate(models.Model):
     category = models.ForeignKey(IncidentCategory, null=True, blank=True)
     concerned_business_lines = models.ManyToManyField(BusinessLine, blank=True)
     detection = models.ForeignKey(Label, limit_choices_to={'group__name': 'detection'}, null=True, blank=True)
-    todolist = models.ManyToManyField(TodoItem, blank=True)
+    todolist = models.ManyToManyField(TodoItem, blank=True, limit_choices_to={"incident__isnull": True})
 
     def __unicode__(self):
         return self.name
